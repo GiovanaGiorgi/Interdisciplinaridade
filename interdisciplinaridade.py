@@ -1,82 +1,120 @@
+import streamlit as st
 import mysql.connector
 
-# Função para conectar ao banco de dados
+# Função para conectar ao banco de dados MySQL
 def conectar():
     try:
         conn = mysql.connector.connect(
             host="127.0.0.1",
-            database="aula",        
-            user="root",            
-            password="131989",      
-            port="3306"             
+            database="aula",        # Banco de dados
+            user="root",            # Usuário MySQL
+            password="131989",      # Senha do MySQL
+            port="3306"             # Porta do MySQL
         )
-        conn.autocommit = False  # Desativa o autocommit
+        conn.autocommit = False  # Desativa o autocommit para controle manual de transações
         return conn
     except mysql.connector.Error as e:
-        print(f"Erro ao conectar ao banco de dados: {e}")
+        st.error(f"Erro ao conectar ao banco de dados: {e}")
         return None
 
-# Função principal para iniciar a transação
-def iniciar_transacao():
+# Função para editar o cliente
+def editar_cliente(id_cliente, novo_nome, novo_limite):
     conexao = conectar()
     if conexao is None:
-        print("Falha na conexão. Finalizando...")
         return
-
+    
     cursor = conexao.cursor()
 
     try:
-        # Receber o id do cliente do usuário
-        id_cliente_dinamico = input("Digite o ID do cliente que deseja editar: ")
-
-        # Iniciar transação e tentar bloquear o registro
-        cursor.execute("BEGIN;")
-        cursor.execute("SELECT * FROM cliente WHERE idcliente = %s FOR UPDATE;", (id_cliente_dinamico,))
-
-        # Buscar e exibir informações do cliente
+        # Iniciar transação
+        cursor.execute("START TRANSACTION;")
+        
+        # Seleciona o cliente com o id fornecido para verificar os dados
+        cursor.execute("SELECT nome, limite FROM cliente WHERE idcliente = %s;", (id_cliente,))
         cliente = cursor.fetchone()
+        
         if cliente is None:
-            print("Cliente não encontrado.")
-            conexao.rollback()
+            st.error("Cliente não encontrado.")
+            conexao.rollback()  # Desfaz a transação
             return
 
-        # Exibir dados atuais
-        print(f"Dados atuais do Cliente (ID {id_cliente_dinamico}): Nome: {cliente[1]}, Limite: {cliente[2]}")
+        # Mostrar os dados atuais do cliente
+        nome_atual, limite_atual = cliente
+        st.write(f"Dados atuais do Cliente (ID {id_cliente}): Nome: {nome_atual}, Limite: {limite_atual}")
 
-        # Solicitar novos valores para nome e limite
-        novo_nome = input("Digite o novo nome para o cliente: ")
-        novo_limite = input("Digite o novo limite para o cliente: ")
+        # Debug: Verificar os valores que estão sendo comparados
+        st.write(f"Comparando os dados atuais com os novos dados fornecidos.")
+        st.write(f"Nome atual: {nome_atual} | Novo nome: {novo_nome}")
+        st.write(f"Limite atual: {limite_atual} | Novo limite: {novo_limite}")
 
-        # Atualizar com os novos valores
-        cursor.execute("UPDATE cliente SET nome = %s, limite = %s WHERE idcliente = %s;",
-                       (novo_nome, novo_limite, id_cliente_dinamico))
+        # Comparar com os novos dados fornecidos pelo usuário
+        # Remove espaços em branco e compara sem diferenciar maiúsculas/minúsculas
+        if nome_atual.strip().lower() == novo_nome.strip().lower() and limite_atual == novo_limite:
+            st.warning("Nenhuma alteração detectada nos dados do cliente.")
+            conexao.rollback()  # Não faz nada se os dados não foram alterados
+            return
 
-        # Confirmar com o usuário
-        confirmacao = input("Deseja confirmar a alteração? (s/n): ")
-        if confirmacao.lower() == 's':
-            conexao.commit()
-            print("Transação concluída e confirmada.")
-        else:
-            conexao.rollback()
-            print("Transação cancelada.")
+        # Atualiza os dados do cliente
+        st.write("Alterando os dados do cliente...")  # Debug
+        cursor.execute("UPDATE cliente SET nome = %s, limite = %s WHERE idcliente = %s;", 
+                       (novo_nome, novo_limite, id_cliente))
 
-    except psycopg2.errors.LockNotAvailable:
-        # Tratar erro de bloqueio, indicando que outro usuário está usando o registro
-        print("Erro: o registro está em uso por outro usuário. Tente novamente mais tarde.")
+        # Espera a confirmação do usuário para efetuar o commit
+        st.write(f"Tem certeza que deseja alterar os dados do cliente (ID {id_cliente})?")
 
-    except psycopg2.errors.SerializationFailure:
-        # Tratar erro de conflito (usuário precisa atualizar)
-        print("Erro: o registro foi atualizado por outro usuário. Atualize os dados antes de tentar novamente.")
-
-    except Exception as e:
-        # Tratar outros erros e desfazer transação
-        conexao.rollback()
-        print("Erro na transação:", e)
-
+        # Aguardar confirmação do usuário
+        if st.button("Confirmar alteração"):
+            try:
+                # Se a confirmação for dada, faz o commit
+                conexao.commit()  # Confirma as alterações no banco de dados
+                st.success("Alteração realizada com sucesso!")
+            except mysql.connector.Error as e:
+                conexao.rollback()  # Desfaz a transação em caso de erro
+                st.error(f"Erro ao realizar a alteração: {e}")
+        elif st.button("Cancelar alteração"):
+            conexao.rollback()  # Desfaz as alterações
+            st.info("Alteração cancelada.")
+    
+    except mysql.connector.Error as e:
+        conexao.rollback()  # Desfaz a transação em caso de erro
+        st.error(f"Erro ao realizar a alteração: {e}")
+    
     finally:
         cursor.close()
         conexao.close()
 
-# Executa o script
+# Função principal da interface Streamlit
+def main():
+    st.title("Sistema de Edição de Cliente")
+    
+    # Entrada do ID do cliente
+    id_cliente = st.number_input("Digite o ID do cliente que deseja editar", min_value=1)
+    
+    if id_cliente:
+        # Carregar os dados do cliente
+        conexao = conectar()
+        if conexao is None:
+            return
+        
+        cursor = conexao.cursor()
+        cursor.execute("SELECT * FROM cliente WHERE idcliente = %s;", (id_cliente,))
+        cliente = cursor.fetchone()
+        
+        if cliente:
+            st.write(f"Dados atuais do Cliente (ID {id_cliente}): Nome: {cliente[1]}, Limite: {cliente[2]}")
+            
+            # Entradas para novos dados
+            novo_nome = st.text_input("Novo nome do cliente", value=cliente[1])
+            novo_limite = st.number_input("Novo limite", value=float(cliente[2]), step=0.01)  # Converte para float
+            
+            # Ação para editar
+            if st.button("Editar Cliente"):
+                editar_cliente(id_cliente, novo_nome, novo_limite)
+        else:
+            st.error("Cliente não encontrado.")
+        
+        cursor.close()
+        conexao.close()
+
 if __name__ == "__main__":
-    iniciar_transacao()
+    main()
